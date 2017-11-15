@@ -1,3 +1,9 @@
+This is a modified (read completely unofficial and unaffiliated) version of the TensorFlow-Slim model library that I have isolated from the original at https://github.com/tensorflow/models/tree/master/research/slim 
+
+It includes experimental datasets (using tf.data.Dataset API), customized preprocessing code, and possibly more.
+
+The original TF-slim readme follows:
+
 # TensorFlow-Slim image classification model library
 
 [TF-slim](https://github.com/tensorflow/tensorflow/tree/master/tensorflow/contrib/slim)
