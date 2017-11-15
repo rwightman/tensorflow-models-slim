@@ -104,17 +104,6 @@ def main(_):
         num_classes=(dataset.num_classes - FLAGS.labels_offset),
         is_training=False)
 
-    ##############################################################
-    # Create a dataset provider that loads data from the dataset #
-    ##############################################################
-    provider = slim.dataset_data_provider.DatasetDataProvider(
-        dataset,
-        shuffle=False,
-        common_queue_capacity=2 * FLAGS.batch_size,
-        common_queue_min=FLAGS.batch_size)
-    [image, label] = provider.get(['image', 'label'])
-    label -= FLAGS.labels_offset
-
     #####################################
     # Select the preprocessing function #
     #####################################
@@ -125,13 +114,30 @@ def main(_):
 
     eval_image_size = FLAGS.eval_image_size or network_fn.default_image_size
 
-    image = image_preprocessing_fn(image, eval_image_size, eval_image_size)
+    if 'slim.data.dataset' in str(type(dataset)):
+        ##############################################################
+        # Create a dataset provider that loads data from the dataset #
+        ##############################################################
+        provider = slim.dataset_data_provider.DatasetDataProvider(
+            dataset,
+            shuffle=False,
+            common_queue_capacity=2 * FLAGS.batch_size,
+            common_queue_min=FLAGS.batch_size)
+        [image, label] = provider.get(['image', 'label'])
+        label -= FLAGS.labels_offset
 
-    images, labels = tf.train.batch(
-        [image, label],
-        batch_size=FLAGS.batch_size,
-        num_threads=FLAGS.num_preprocessing_threads,
-        capacity=5 * FLAGS.batch_size)
+        image = image_preprocessing_fn(image, eval_image_size, eval_image_size)
+
+        images, labels = tf.train.batch(
+            [image, label],
+            batch_size=FLAGS.batch_size,
+            num_threads=FLAGS.num_preprocessing_threads,
+            capacity=5 * FLAGS.batch_size)
+    else:
+        process_fn = lambda x: image_preprocessing_fn(x, eval_image_size, eval_image_size)
+        images, labels = dataset.get_inputs(
+          process_fn=process_fn,
+          batch_size=FLAGS.batch_size, num_threads=FLAGS.num_preprocessing_threads, epochs=1)
 
     ####################
     # Define the model #
