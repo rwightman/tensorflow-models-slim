@@ -76,7 +76,7 @@ def _large_imagenet_config(is_training=True):
       drop_path_keep_prob=drop_path_keep_prob,
       use_aux_head=1,
       num_reduction_layers=2,
-      data_format='NHWC',
+      data_format='NCHW',
       skip_reduction_layer_input=1,
       total_training_steps=250000,
   )
