@@ -34,13 +34,17 @@ tf.app.flags.DEFINE_string(
     'train_dir', '/tmp/tfmodel/',
     'Directory where checkpoints and event logs are written to.')
 
-tf.app.flags.DEFINE_integer('num_clones', 1,
-                            'Number of model clones to deploy.')
+tf.app.flags.DEFINE_integer(
+    'num_clones', 1,
+    'Number of model clones to deploy.')
 
-tf.app.flags.DEFINE_boolean('clone_on_cpu', False,
-                            'Use CPUs to deploy clones.')
+tf.app.flags.DEFINE_boolean(
+    'clone_on_cpu', False,
+    'Use CPUs to deploy clones.')
 
-tf.app.flags.DEFINE_integer('worker_replicas', 1, 'Number of worker replicas.')
+tf.app.flags.DEFINE_integer(
+    'worker_replicas', 1,
+    'Number of worker replicas.')
 
 tf.app.flags.DEFINE_integer(
     'num_ps_tasks', 0,
@@ -56,19 +60,22 @@ tf.app.flags.DEFINE_integer(
     'The number of threads used to create the batches.')
 
 tf.app.flags.DEFINE_integer(
-    'log_every_n_steps', 10,
+    'log_every_n_steps', 100,
     'The frequency with which logs are print.')
 
 tf.app.flags.DEFINE_integer(
-    'save_summaries_secs', 600,
+    'save_summaries_secs', 900,
     'The frequency with which summaries are saved, in seconds.')
 
 tf.app.flags.DEFINE_integer(
-    'save_interval_secs', 600,
+    'save_interval_secs', 21600,
     'The frequency with which the model is saved, in seconds.')
 
 tf.app.flags.DEFINE_integer(
     'task', 0, 'Task id of the replica running the training.')
+
+tf.app.flags.DEFINE_integer(
+    'seed', 42, 'Random seed.')
 
 ######################
 # Optimization Flags #
@@ -78,7 +85,7 @@ tf.app.flags.DEFINE_float(
     'weight_decay', 0.00004, 'The weight decay on the model weights.')
 
 tf.app.flags.DEFINE_string(
-    'optimizer', 'rmsprop',
+    'optimizer', 'momentum',
     'The name of the optimizer, one of "adadelta", "adagrad", "adam",'
     '"ftrl", "momentum", "sgd" or "rmsprop".')
 
@@ -141,7 +148,7 @@ tf.app.flags.DEFINE_float(
     'label_smoothing', 0.0, 'The amount of label smoothing.')
 
 tf.app.flags.DEFINE_float(
-    'learning_rate_decay_factor', 0.94, 'Learning rate decay factor.')
+    'learning_rate_decay_factor', 0.1, 'Learning rate decay factor.')
 
 tf.app.flags.DEFINE_float(
     'num_epochs_per_decay', 2.0,
@@ -298,6 +305,7 @@ def _configure_optimizer(learning_rate):
     optimizer = tf.train.MomentumOptimizer(
         learning_rate,
         momentum=FLAGS.momentum,
+        use_nesterov=True,
         name='Momentum')
   elif FLAGS.optimizer == 'rmsprop':
     optimizer = tf.train.RMSPropOptimizer(
@@ -385,6 +393,8 @@ def main(_):
 
   tf.logging.set_verbosity(tf.logging.INFO)
   with tf.Graph().as_default():
+    tf.set_random_seed(FLAGS.seed)
+
     #######################
     # Config model_deploy #
     #######################
@@ -397,7 +407,7 @@ def main(_):
 
     # Create global_step
     with tf.device(deploy_config.variables_device()):
-      global_step = slim.create_global_step()
+      global_step = tf.train.create_global_step()
 
     ######################
     # Select the dataset #
@@ -414,64 +424,86 @@ def main(_):
         weight_decay=FLAGS.weight_decay,
         is_training=True)
 
-    #####################################
-    # Select the preprocessing function #
-    #####################################
-    preprocessing_name = FLAGS.preprocessing_name or FLAGS.model_name
-    image_preprocessing_fn = preprocessing_factory.get_preprocessing(
+    dataset_is_iterator = False
+    with tf.device(deploy_config.inputs_device()):
+      #####################################
+      # Select the preprocessing function #
+      #####################################
+      preprocessing_name = FLAGS.preprocessing_name or FLAGS.model_name
+      image_preprocessing_fn = preprocessing_factory.get_preprocessing(
         preprocessing_name,
         is_training=True)
-
-    ##############################################################
-    # Create a dataset provider that loads data from the dataset #
-    ##############################################################
-    with tf.device(deploy_config.inputs_device()):
-      provider = slim.dataset_data_provider.DatasetDataProvider(
-          dataset,
-          num_readers=FLAGS.num_readers,
-          common_queue_capacity=20 * FLAGS.batch_size,
-          common_queue_min=10 * FLAGS.batch_size)
-      [image, label] = provider.get(['image', 'label'])
-      label -= FLAGS.labels_offset
-
       train_image_size = FLAGS.train_image_size or network_fn.default_image_size
 
-      image = image_preprocessing_fn(image, train_image_size, train_image_size)
+      if 'slim.data.dataset' in str(type(dataset)):
+        ##############################################################
+        # Create a dataset provider that loads data from the dataset #
+        ##############################################################
+        provider = slim.dataset_data_provider.DatasetDataProvider(
+            dataset,
+            num_readers=FLAGS.num_readers,
+            common_queue_capacity=20 * FLAGS.batch_size,
+            common_queue_min=10 * FLAGS.batch_size)
+        [image, label] = provider.get(['image', 'label'])
+        label -= FLAGS.labels_offset
 
-      images, labels = tf.train.batch(
-          [image, label],
+        image = image_preprocessing_fn(image, train_image_size, train_image_size)
+
+        images, labels = tf.train.batch(
+            [image, label],
+            batch_size=FLAGS.batch_size,
+            num_threads=FLAGS.num_preprocessing_threads,
+            capacity=5 * FLAGS.batch_size)
+        labels = slim.one_hot_encoding(
+            labels, dataset.num_classes - FLAGS.labels_offset)
+        data_source = slim.prefetch_queue.prefetch_queue(
+            [images, labels], capacity=2 * deploy_config.num_clones)
+      else:
+        dataset_is_iterator = True
+        process_fn = lambda x: image_preprocessing_fn(x, train_image_size, train_image_size)
+        data_source = dataset.get_iterator(
+          process_fn=process_fn,
+          shuffle=True,
           batch_size=FLAGS.batch_size,
           num_threads=FLAGS.num_preprocessing_threads,
-          capacity=5 * FLAGS.batch_size)
-      labels = slim.one_hot_encoding(
-          labels, dataset.num_classes - FLAGS.labels_offset)
-      batch_queue = slim.prefetch_queue.prefetch_queue(
-          [images, labels], capacity=2 * deploy_config.num_clones)
+          num_pull=FLAGS.num_clones)
 
     ####################
     # Define the model #
     ####################
-    def clone_fn(batch_queue):
+    def clone_fn(_data_source):
       """Allows data parallelism by creating multiple clones of network_fn."""
-      images, labels = batch_queue.dequeue()
+      if dataset_is_iterator:
+        images, labels = _data_source.get_next()
+        #images = tf.reshape(
+        #  images, tf.concat([[FLAGS.batch_size], images.shape[1:]], 0))
+        # FIXME push one-hot into dataset pipeline?
+        labels = slim.one_hot_encoding(
+            labels, dataset.num_classes - FLAGS.labels_offset)
+        #labels = tf.reshape(
+        #  labels, tf.concat([[FLAGS.batch_size], labels.shape[1:]], 0))
+        print(images.shape, labels.shape)
+      else:
+        images, labels = _data_source.dequeue()
+
       logits, end_points = network_fn(images)
 
       #############################
       # Specify the loss function #
       #############################
       if 'AuxLogits' in end_points:
-        slim.losses.softmax_cross_entropy(
-            end_points['AuxLogits'], labels,
+        tf.losses.softmax_cross_entropy(
+            labels, end_points['AuxLogits'],
             label_smoothing=FLAGS.label_smoothing, weights=0.4,
             scope='aux_loss')
-      slim.losses.softmax_cross_entropy(
-          logits, labels, label_smoothing=FLAGS.label_smoothing, weights=1.0)
+      tf.losses.softmax_cross_entropy(
+          labels, logits, label_smoothing=FLAGS.label_smoothing, weights=1.0)
       return end_points
 
     # Gather initial summaries.
     summaries = set(tf.get_collection(tf.GraphKeys.SUMMARIES))
 
-    clones = model_deploy.create_clones(deploy_config, clone_fn, [batch_queue])
+    clones = model_deploy.create_clones(deploy_config, clone_fn, [data_source])
     first_clone_scope = deploy_config.clone_scope(0)
     # Gather update_ops from the first clone. These contain, for example,
     # the updates for the batch_norm variables created by network_fn.
@@ -551,7 +583,6 @@ def main(_):
 
     # Merge all summaries together.
     summary_op = tf.summary.merge(list(summaries), name='summary_op')
-
 
     ###########################
     # Kicks off the training. #

@@ -145,9 +145,9 @@ class DatasetImageFolder:
       dataset = dataset.shuffle(buffer_size=10000)
     dataset = dataset.map(_parse_data, num_parallel_calls=num_threads)
     dataset = dataset.prefetch((num_threads + 1) * batch_size * num_pull)
+    dataset = dataset.repeat(epochs)
     dataset = dataset.batch(batch_size)
     dataset = dataset.prefetch(num_pull)
-    dataset = dataset.repeat(epochs)
 
     return dataset.make_one_shot_iterator()
 
@@ -157,7 +157,7 @@ class DatasetImageFolder:
           batch_size=32, epochs=-1, num_threads=4, num_pull=1):
 
     return self.get_iterator(
-      process_fn, shuffle, batch_size, num_threads, num_pull, epochs).get_next()
+      process_fn, shuffle, batch_size, epochs, num_threads, num_pull).get_next()
 
 
 def get_split(split_name, dataset_dir, file_pattern=None, reader=None):

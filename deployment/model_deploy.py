@@ -360,7 +360,7 @@ def deploy(config,
     if optimizer:
       # Place the global step on the device storing the variables.
       with tf.device(config.variables_device()):
-        global_step = slim.get_or_create_global_step()
+        global_step = tf.train.get_or_create_global_step()
 
       # Compute the gradients for the clones.
       total_loss, clones_gradients = optimize_clones(clones, optimizer)

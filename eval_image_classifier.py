@@ -88,7 +88,7 @@ def main(_):
 
   tf.logging.set_verbosity(tf.logging.INFO)
   with tf.Graph().as_default():
-    tf_global_step = slim.get_or_create_global_step()
+    tf_global_step = tf.train.get_or_create_global_step()
 
     ######################
     # Select the dataset #
@@ -137,7 +137,7 @@ def main(_):
         process_fn = lambda x: image_preprocessing_fn(x, eval_image_size, eval_image_size)
         images, labels = dataset.get_inputs(
           process_fn=process_fn,
-          batch_size=FLAGS.batch_size, num_threads=FLAGS.num_preprocessing_threads, epochs=1)
+          batch_size=FLAGS.batch_size, num_threads=FLAGS.num_preprocessing_threads)
 
     ####################
     # Define the model #
